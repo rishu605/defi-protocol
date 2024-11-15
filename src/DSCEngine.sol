@@ -35,6 +35,7 @@ contract DSCEngine is ReentrancyGuard {
     error DSCEngine__TransferFailed();
     error DSCEngine__HealthFactorBelowThreshold(uint256);
     error DSCEngine__MintFailed();
+    error DSCEngine__HealthFactorOk();
 
     ///////////////////
     //State Variables//
@@ -51,7 +52,8 @@ contract DSCEngine is ReentrancyGuard {
     uint256 private constant PRECISION = 1e18;
     uint256 private constant LIQUIDATION_THRESHOLD = 50; // Therefore 200% collateralization ratio
     uint256 private constant LIQUIDATION_PRECISION = 100;
-    uint256 private constant MIN_HEALTH_FACTOR = 1;
+    uint256 private constant MIN_HEALTH_FACTOR = 1e18;
+    uint256 private constant LIQUIDATION_BONUS = 10; // i.e, 10% bonus for liquidating the user
 
     ///////////////////
     ///////Events//////
@@ -181,8 +183,68 @@ contract DSCEngine is ReentrancyGuard {
         // because burning dsc will never lead to health factor being broken
 
     }
+    /**
+     * @dev Liquidate a user
+     * If someone is almost undercollateralized, then we will pay you to liquidate them
+     * This is a way to incentivize people to keep the system overcollateralized
+     * This function will be called by a liquidator
+     * The liquidator will get a reward for liquidating the user
+     * The reward will be a percentage of the collateral that the liquidator liquidated
+     * $100 ETh baxking $50 DSC
+     * Now, price of Eth falls so $20 ETH is now backing $50 DSC
+     * This cannot be allowed to happen
+     * So, liquidator takes $75 and burns off the $50 DSC
+     * Liquidator got a percentage of the $100 ETh or $50 DSC that was burned
+     Example Clarification:
 
-    function liquidate() external {}
+	1.	Initial Position:
+	•	$100 ETH backing $50 DSC results in a 200% collateralization ratio (safe).
+	2.	Price Drop:
+	•	ETH falls, and $20 ETH now backs $50 DSC, dropping the collateralization ratio to 40% (unsafe).
+	3.	Liquidation:
+	•	Liquidators step in and:
+	•	Burn $50 DSC (removing it from circulation).
+	•	Receive $75 worth of ETH from the collateral (a percentage of the total collateral as their reward).
+	•	The remaining collateral, if any, may be returned to the original borrower.
+	4.	Outcome:
+	•	The system regains its overcollateralized state, and liquidators profit from their action.
+    */
+
+    /**
+     * @dev Liquidate a user
+     * @param collateral The address of the collateral token that has to be liquidated
+     * @param user The address of the user whose health factor broke
+     * @param debtToCover The amount of DSC to cover i.e., burn to improve the users health factor
+     * User can be liquidated partially
+     * Liquidator will get a reward for liquidating the user
+     */
+    function liquidate(address collateral, address user, uint256 debtToCover) external moreThanZero(debtToCover) nonReentrant() {
+        // Only liquidate people who need to be liquidated based on their health factor
+        uint256 startingUserHealthFactor = _healthFactor(user);
+        if(startingUserHealthFactor >= MIN_HEALTH_FACTOR) {
+            revert DSCEngine__HealthFactorOk();
+        }
+        // We want to burn the DSC "debt" and take their collateral
+        // For a system with 200% collateralization
+        // Bad User: $140 ETH, $100 DSC
+        // Good User: $200 ETH, $100 DSC
+        // debtToCover = $100 DSC
+        // Now, we need to find how much of collateral token are we gonna get for the amount of DSC we have currently
+        // We will get the amount of collateral token that is equal to the amount of DSC we have
+        uint256 tokenAmountFromDebtCovered = getTokenAmountFromUsd(collateral, debtToCover);
+        // Give the liquidator a 10% bonus for liquidating the user
+        // So, in essence we are giving the liquidator $110 of WETH for $100 DSC
+        // This is to incentivize liquidators to liquidate users
+        uint256 bonusCollateral = (tokenAmountFromDebtCovered * LIQUIDATION_BONUS) / LIQUIDATION_PRECISION;
+        uint256 totalCollateralToRedeem = tokenAmountFromDebtCovered + bonusCollateral;
+    }
+
+    function getTokenAmountFromUsd(address token, uint256 usdAmountInWei) public view returns(uint256) {
+        // Get the price of collateral token in USD
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeed[token]);
+        (, int256 price, , , ) = priceFeed.latestRoundData();
+        return (usdAmountInWei * PRECISION)/ (uint256(price) * ADDITIONAL_FEED_PRECISION);
+    }
 
     function getHealthFactor() external view {}
 
