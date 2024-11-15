@@ -6,6 +6,7 @@ import {DecentralizedStableCoin} from "./DecentralizedStableCoin.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {console} from "forge-std/console.sol";
 
 /* @title DSCEngine
  * The system is designed to be as minimal as possible and have the token
@@ -33,6 +34,7 @@ contract DSCEngine is ReentrancyGuard {
     error DSCEngine__TokenNotSupported();
     error DSCEngine__TransferFailed();
     error DSCEngine__HealthFactorBelowThreshold(uint256);
+    error DSCEngine__MintFailed();
 
     ///////////////////
     //State Variables//
@@ -92,8 +94,16 @@ contract DSCEngine is ReentrancyGuard {
         }
         i_dsc = DecentralizedStableCoin(dscAddress);
     }
-
-    function depositCollateralAndMintDsc() external {}
+    /**
+     * @param tokenCollateralAddress The address of the token to be deposited as collateral
+     * @param amountCollateral The amount of the token to be deposited as collateral
+     * @param amountDscToMint The amount of DSC to mint
+     * @notice This function is a convenience function to deposit collateral and mint DSC in single transaction 
+     */
+    function depositCollateralAndMintDsc(address tokenCollateralAddress, uint256 amountCollateral, uint256 amountDscToMint) external {
+        depositCollateral(tokenCollateralAddress, amountCollateral);
+        mintDsc(amountDscToMint);
+    }
 
     /**
      * @dev Deposit collateral to mint DSC
@@ -104,7 +114,7 @@ contract DSCEngine is ReentrancyGuard {
         address tokenCollateralAddress,
         uint256 amountCollateral
     )
-        external
+        public
         moreThanZero(amountCollateral)
         isAllowedToken(tokenCollateralAddress)
         nonReentrant
@@ -130,6 +140,10 @@ contract DSCEngine is ReentrancyGuard {
     function mintDsc(uint256 amountDscToMint) external moreThanZero(amountDscToMint) nonReentrant {
         s_DSCMinted[msg.sender] += amountDscToMint;
         revertIfHealthFactorIsBroken(msg.sender);
+        bool minted = i_dsc.mint(msg.sender, amountDscToMint);
+        if(!minted) {
+            revert DSCEngine__MintFailed();
+        }
     }
 
     function burnDsc() external {}
@@ -182,9 +196,11 @@ contract DSCEngine is ReentrancyGuard {
 
     function getUsdValue(address token, uint256 amount) public view returns(uint256) {
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeed[token]);
+        console.log("priceFeed: ", address(priceFeed));
         (, int256 price, , , ) = priceFeed.latestRoundData();
         // If 1 Eth = $1000 then returned value from Chainlink pricefeed will be:
         // 1000 * 1e8 = 100000000000
+        console.log("price: ",  price);
         return ((uint256(price) * ADDITIONAL_FEED_PRECISION) * amount) / PRECISION;
     }
 }
