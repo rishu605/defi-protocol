@@ -316,4 +316,12 @@ contract DSCEngine is ReentrancyGuard {
         console.log("price: ",  price);
         return ((uint256(price) * ADDITIONAL_FEED_PRECISION) * amount) / PRECISION;
     }
+
+    function getCollateralBalance(address user, address token) public returns (uint256){
+        return s_collateralDeposited[user][token];
+    }
+
+    function getAccountInformation(address user) external view returns(uint256 totalDscMinted, uint256 collateralValueInUsd) {
+        (totalDscMinted, collateralValueInUsd) = _getAccountInformation(user);
+    }
 }
